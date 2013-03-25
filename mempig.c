@@ -29,13 +29,16 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/mman.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 static void usage(void)
@@ -46,6 +49,36 @@ static void usage(void)
     fprintf(stderr, "-d:                  daemonize\n");
     fprintf(stderr, "-h:                  this help message\n");
     fprintf(stderr, "-n:                  skip populate stage\n");
+}
+
+static void close_stdin_stdout_stderr(void)
+{
+    int err, fd = open("/dev/null", O_RDONLY);
+    if (fd < 0) {
+        err = errno;
+        fprintf(stderr, "failed to open /dev/null: error %d (%s)\n",
+                err, strerror(err));
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(fd, STDIN_FILENO) < 0) {
+        err = errno;
+        fprintf(stderr, "failed to dup /dev/null to stdin: "
+                "error %d (%s)\n", err, strerror(err));
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(fd, STDOUT_FILENO) < 0) {
+        err = errno;
+        fprintf(stderr, "failed to dup /dev/null to stdout: "
+                "error %d (%s)\n", err, strerror(err));
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(fd, STDERR_FILENO) < 0) {
+        err = errno;
+        fprintf(stderr, "failed to dup /dev/null to stderr: "
+                "error %d (%s)\n", err, strerror(err));
+        exit(EXIT_FAILURE);
+    }
+    close(fd);
 }
 
 int main(int argc, char **argv)
@@ -111,6 +144,16 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "successfully touched %"PRId64" bytes.\n", amt);
     }
+    if (daemonize) {
+        fprintf(stderr, "daemonizing...\n");
+        errno = 0;
+        if (daemon(0, 1) == -1) {
+            err = errno;
+            fprintf(stderr, "attempt to daemonize failed: %d (%s)\n",
+                    err, strerror(err));  
+            exit(EXIT_FAILURE);
+        }
+    }
     /* lock the pages into memory */
     if (mlock(addr, amt)) {
         err = errno;
@@ -119,14 +162,7 @@ int main(int argc, char **argv)
     }
     fprintf(stderr, "successfully locked %"PRId64" bytes.\n", amt);
     if (daemonize) {
-        fprintf(stderr, "daemonizing...\n");
-        errno = 0;
-        if (daemon(0, 0) == -1) {
-            err = errno;
-            fprintf(stderr, "attempt to daemonize failed: %d (%s)\n",
-                    err, strerror(err));  
-            exit(EXIT_FAILURE);
-        }
+        close_stdin_stdout_stderr();
     }
     while (1) {
         sleep(100);
