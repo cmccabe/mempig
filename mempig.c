@@ -43,18 +43,19 @@ static void usage(void)
     fprintf(stderr, "mempig: a program which consumes memory.\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, "-a [amount]:         amount of memory to consume in bytes\n");
+    fprintf(stderr, "-d:                  daemonize\n");
     fprintf(stderr, "-h:                  this help message\n");
     fprintf(stderr, "-n:                  skip populate stage\n");
 }
 
 int main(int argc, char **argv)
 {
-    int c, err, populate = 1;
+    int c, err, populate = 1, daemonize = 0;
     int64_t i, amt = -1;
     size_t mmap_len;
     uint32_t *addr;
 
-    while ((c = getopt(argc, argv, "a:hn")) != -1) {
+    while ((c = getopt(argc, argv, "a:dhn")) != -1) {
         switch (c) {
         case 'a':
             amt = atoll(optarg);
@@ -62,6 +63,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid amount of memory specified: %s\n", optarg);
                 exit(EXIT_FAILURE);
             }
+            break;
+        case 'd':
+            daemonize = 1;
             break;
         case 'n':
             populate = 0;
@@ -114,6 +118,16 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
     fprintf(stderr, "successfully locked %"PRId64" bytes.\n", amt);
+    if (daemonize) {
+        fprintf(stderr, "daemonizing...\n");
+        errno = 0;
+        if (daemon(0, 0) == -1) {
+            err = errno;
+            fprintf(stderr, "attempt to daemonize failed: %d (%s)\n",
+                    err, strerror(err));  
+            exit(EXIT_FAILURE);
+        }
+    }
     while (1) {
         sleep(100);
     }
