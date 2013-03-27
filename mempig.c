@@ -27,7 +27,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define _GNU_SOURCE
+#include "daemon.h"
+#include "log.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -43,59 +45,38 @@
 
 static void usage(void)
 {
-    fprintf(stderr, "mempig: a program which consumes memory.\n");
-    fprintf(stderr, "options:\n");
-    fprintf(stderr, "-a [amount]:         amount of memory to consume in bytes\n");
-    fprintf(stderr, "-d:                  daemonize\n");
-    fprintf(stderr, "-h:                  this help message\n");
-    fprintf(stderr, "-n:                  skip populate stage\n");
-}
-
-static void close_stdin_stdout_stderr(void)
-{
-    int err, fd = open("/dev/null", O_RDONLY);
-    if (fd < 0) {
-        err = errno;
-        fprintf(stderr, "failed to open /dev/null: error %d (%s)\n",
-                err, strerror(err));
-        exit(EXIT_FAILURE);
-    }
-    if (dup2(fd, STDIN_FILENO) < 0) {
-        err = errno;
-        fprintf(stderr, "failed to dup /dev/null to stdin: "
-                "error %d (%s)\n", err, strerror(err));
-        exit(EXIT_FAILURE);
-    }
-    if (dup2(fd, STDOUT_FILENO) < 0) {
-        err = errno;
-        fprintf(stderr, "failed to dup /dev/null to stdout: "
-                "error %d (%s)\n", err, strerror(err));
-        exit(EXIT_FAILURE);
-    }
-    if (dup2(fd, STDERR_FILENO) < 0) {
-        err = errno;
-        fprintf(stderr, "failed to dup /dev/null to stderr: "
-                "error %d (%s)\n", err, strerror(err));
-        exit(EXIT_FAILURE);
-    }
-    close(fd);
+    mempig_log("mempig: a program which consumes memory.\n");
+    mempig_log("options:\n");
+    mempig_log("-a [amount]:         amount of memory to consume in bytes\n");
+    mempig_log("-d:                  daemonize\n");
+    mempig_log("-h:                  this help message\n");
+    mempig_log("-n:                  skip populate stage\n");
 }
 
 int main(int argc, char **argv)
 {
     int c, err, populate = 1, daemonize = 0;
-    int64_t i, amt = -1;
-    size_t mmap_len;
+    long long ll;
+    size_t i, amt = 0;
     uint32_t *addr;
 
     while ((c = getopt(argc, argv, "a:dhn")) != -1) {
         switch (c) {
         case 'a':
-            amt = atoll(optarg);
-            if (amt == 0) {
-                fprintf(stderr, "invalid amount of memory specified: %s\n", optarg);
+            ll = atoll(optarg);
+            if (ll <= 0) {
+                mempig_log("invalid amount of memory specified: %s\n", optarg);
+                exit(EXIT_FAILURE);
+            } else if (ll % 4 != 0) {
+                mempig_log("amount must be a multiple of 4.  -h for help.\n");
+                exit(EXIT_FAILURE);
+            } else if ((sizeof(long long) > sizeof(size_t)) &&
+                ((long long)((size_t)ll) < ll)) {
+                mempig_log("error: amt = %lld is greater than the maximum range "
+                        "of size_t, which is %lld\n", ll, (long long)((size_t)-1));
                 exit(EXIT_FAILURE);
             }
+            amt = ll;
             break;
         case 'd':
             daemonize = 1;
@@ -108,62 +89,42 @@ int main(int argc, char **argv)
             exit(EXIT_SUCCESS);
             break;
         default:
-            fprintf(stderr, "Options parsing error.\n\n");
+            mempig_log("Options parsing error.\n\n");
             usage();
             exit(EXIT_FAILURE);
         }
     }
-    if (amt == -1) {
-        fprintf(stderr, "you must specify how much memory to lock.  -h for help.\n");
+    if (amt == 0) {
+        mempig_log("you must specify how much memory to lock.  -h for help.\n");
         exit(EXIT_FAILURE);
     }
-    if (amt % 4 != 0) {
-        fprintf(stderr, "amount must be a multiple of 4.  -h for help.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    mmap_len = -1;
-    if (mmap_len < amt) {
-        fprintf(stderr, "error: amt = %"PRId64 " is greater than the maximum range "
-                "of size_t, which is %zd\n", amt, mmap_len);
-        exit(EXIT_FAILURE);
-    }
-    mmap_len = amt;
     addr = mmap(NULL, amt, PROT_READ | PROT_WRITE,
                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (addr == MAP_FAILED) {
         err = errno;
-        fprintf(stderr, "mmap failed: error %d (%s)\n", err, strerror(err));
+        mempig_log("mmap failed: error %d (%s)\n", err, strerror(err));
         exit(EXIT_FAILURE);
     }
-    fprintf(stderr, "successfully mmap'ed %"PRId64" bytes.\n", amt);
+    mempig_log("successfully mmap'ed %"PRId64" bytes.\n", amt);
     if (populate) {
         /* touch all pages */
         for (i = 0; i < (amt / 4); i++) {
             addr[i] = i % 50;
         }
-        fprintf(stderr, "successfully touched %"PRId64" bytes.\n", amt);
+        mempig_log("successfully touched %"PRId64" bytes.\n", amt);
     }
     if (daemonize) {
-        fprintf(stderr, "daemonizing...\n");
+        mempig_log("daemonizing...\n");
         errno = 0;
-        if (daemon(0, 1) == -1) {
-            err = errno;
-            fprintf(stderr, "attempt to daemonize failed: %d (%s)\n",
-                    err, strerror(err));  
-            exit(EXIT_FAILURE);
-        }
+        daemonize_me();
     }
     /* lock the pages into memory */
     if (mlock(addr, amt)) {
         err = errno;
-        fprintf(stderr, "mlock error: %d (%s)\n", err, strerror(err));
+        mempig_log("mlock error: %d (%s)\n", err, strerror(err));
         exit(EXIT_FAILURE);
     }
-    fprintf(stderr, "successfully locked %"PRId64" bytes.\n", amt);
-    if (daemonize) {
-        close_stdin_stdout_stderr();
-    }
+    mempig_log("successfully locked %"PRId64" bytes.\n", amt);
     while (1) {
         sleep(100);
     }
